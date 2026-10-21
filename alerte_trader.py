@@ -174,6 +174,7 @@ def main():
         print(f"{court(wallet)} : {len(signatures)} transactions lues, {len(nouvelles)} nouvelles.")
 
         echecs = set()
+        achats = {}
         for sig in reversed(nouvelles):
             time.sleep(0.4)
             try:
@@ -184,15 +185,19 @@ def main():
                 continue
             print(f"  {sig[:8]}... : {len(mints)} token(s) acheté(s).")
             for mint in mints:
-                verdict, raisons = verifier_rugcheck(mint)
-                print(f"  {court(wallet)} a acheté {mint} -> {verdict} {raisons}")
-                journal(wallet, mint, verdict, raisons)
-                envoyer_telegram(
-                    f"Le trader {court(wallet)} a acheté un coin\n"
-                    f"RugCheck : {verdict} {', '.join(raisons)}\n"
-                    f"https://rugcheck.xyz/tokens/{mint}\n"
-                    f"https://dexscreener.com/solana/{mint}"
-                )
+                achats[mint] = achats.get(mint, 0) + 1
+
+        for mint, nb in achats.items():
+            verdict, raisons = verifier_rugcheck(mint)
+            print(f"  {court(wallet)} a acheté {mint} ({nb} achat(s)) -> {verdict} {raisons}")
+            journal(wallet, mint, verdict, raisons)
+            suite = f" ({nb} achats)" if nb > 1 else ""
+            envoyer_telegram(
+                f"Le trader {court(wallet)} a acheté un coin{suite}\n"
+                f"RugCheck : {verdict} {', '.join(raisons)}\n"
+                f"https://rugcheck.xyz/tokens/{mint}\n"
+                f"https://dexscreener.com/solana/{mint}"
+            )
 
         traitees = [s for s in signatures if s not in echecs]
         anciennes = [s for s in vues[wallet] if s not in signatures][:400]
