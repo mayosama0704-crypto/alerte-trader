@@ -1,8 +1,6 @@
 """
 Alerte copy-trading pour GitHub Actions (SANS achat automatique).
-Chaque exécution : vérifie les nouvelles transactions du trader,
-passe les nouveaux tokens dans RugCheck et envoie une alerte Telegram.
-Les secrets viennent des variables d'environnement (jamais dans le code).
+Surveille un ou plusieurs wallets (séparés par des virgules dans le secret WALLET).
 """
 import csv
 import json
@@ -11,7 +9,7 @@ from datetime import datetime
 
 import requests
 
-WALLET = os.environ["WALLET"]
+WALLETS = [w.strip() for w in os.environ["WALLET"].split(",") if w.strip()]
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
@@ -20,6 +18,10 @@ RUGCHECK = "https://api.rugcheck.xyz/v1/tokens/{}/report/summary"
 IGNORER = {"So11111111111111111111111111111111111111112"}
 FICHIER_VUES = "seen.json"
 FICHIER_JOURNAL = "journal.csv"
+
+
+def court(wallet):
+    return wallet[:4] + "..." + wallet[-4:]
 
 
 def rpc(methode, params):
@@ -31,12 +33,12 @@ def rpc(methode, params):
     return r.json().get("result")
 
 
-def dernieres_signatures():
-    res = rpc("getSignaturesForAddress", [WALLET, {"limit": 20}])
+def dernieres_signatures(wallet):
+    res = rpc("getSignaturesForAddress", [wallet, {"limit": 20}])
     return [s["signature"] for s in (res or []) if not s.get("err")]
 
 
-def tokens_achetes(signature):
+def tokens_achetes(signature, wallet):
     tx = rpc(
         "getTransaction",
         [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}],
@@ -48,7 +50,7 @@ def tokens_achetes(signature):
     def soldes(liste):
         out = {}
         for b in liste or []:
-            if b.get("owner") == WALLET:
+            if b.get("owner") == wallet:
                 out[b["mint"]] = float(b["uiTokenAmount"].get("uiAmount") or 0)
         return out
 
@@ -86,42 +88,53 @@ def envoyer_telegram(texte):
         print("Telegram a échoué :", e)
 
 
-def journal(mint, verdict, raisons):
+def journal(wallet, mint, verdict, raisons):
     with open(FICHIER_JOURNAL, "a", newline="", encoding="utf-8") as f:
         csv.writer(f).writerow(
-            [datetime.utcnow().isoformat(timespec="seconds"), mint, verdict, "; ".join(raisons)]
+            [datetime.utcnow().isoformat(timespec="seconds"),
+             court(wallet), mint, verdict, "; ".join(raisons)]
         )
 
 
-def main():
-    signatures = dernieres_signatures()
-    premiere_fois = not os.path.exists(FICHIER_VUES)
-
-    if premiere_fois:
-        vues = set(signatures)  # on ignore l'historique, pas d'alerte
-        print("Premier lancement : historique ignoré.")
-    else:
+def charger_vues():
+    if not os.path.exists(FICHIER_VUES):
+        return {}
+    try:
         with open(FICHIER_VUES, encoding="utf-8") as f:
-            vues = set(json.load(f))
+            d = json.load(f)
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def main():
+    vues = charger_vues()
+    for wallet in WALLETS:
+        signatures = dernieres_signatures(wallet)
+        if wallet not in vues:
+            if signatures:
+                vues[wallet] = signatures
+                print(f"Nouveau wallet {court(wallet)} : historique ignoré.")
+            continue
+        deja = set(vues[wallet])
         for sig in reversed(signatures):
-            if sig in vues:
+            if sig in deja:
                 continue
-            vues.add(sig)
-            for mint in tokens_achetes(sig):
+            for mint in tokens_achetes(sig, wallet):
                 verdict, raisons = verifier_rugcheck(mint)
-                print(f"Achat détecté : {mint} -> {verdict} {raisons}")
-                journal(mint, verdict, raisons)
+                print(f"{court(wallet)} a acheté {mint} -> {verdict} {raisons}")
+                journal(wallet, mint, verdict, raisons)
                 envoyer_telegram(
-                    f"Le trader a acheté un coin\n"
+                    f"Le trader {court(wallet)} a acheté un coin\n"
                     f"RugCheck : {verdict} {', '.join(raisons)}\n"
                     f"https://rugcheck.xyz/tokens/{mint}\n"
                     f"https://dexscreener.com/solana/{mint}"
                 )
+        anciennes = [s for s in vues[wallet] if s not in signatures][:400]
+        vues[wallet] = list(signatures) + anciennes
 
-    # on garde les signatures déjà vues, plus celles de cette exécution
     with open(FICHIER_VUES, "w", encoding="utf-8") as f:
-        anciennes = [s for s in vues if s not in signatures][:400]
-        json.dump(list(signatures) + anciennes, f)
+        json.dump(vues, f)
 
 
 if __name__ == "__main__":
