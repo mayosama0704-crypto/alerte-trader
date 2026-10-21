@@ -112,3 +112,12 @@
 2026-10-21T21:21:39+00:00,EqBQ...4qvv,pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn,OK,
 2026-10-21T21:21:40+00:00,EqBQ...4qvv,Hg5Ja55T5wESq4vyFoiVCMeHXtGyVA69X2UHq8hgpump,OK,
 2026-10-21T21:21:41+00:00,EqBQ...4qvv,F4xhoniv5pNRKqC25LkyRB89MRNuT7QqWEReMrgopump,OK,
+2026-10-21T21:56:01+00:00,4UrF...i1KR,pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn,OK,
+2026-10-21T21:56:08+00:00,EJa8...Z5xp,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v,OK,
+2026-10-21T21:56:09+00:00,EJa8...Z5xp,A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS,MAUVAIS,Mint Authority still enabled
+2026-10-21T21:56:11+00:00,4ugD...ocwo,3FrAvAqu8SCCK8SPpLxj6MHvTdxoZ5YQg8b6r8Wfpump,PRUDENCE,High holder correlation
+2026-10-21T21:56:50+00:00,EqBQ...4qvv,pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn,OK,
+2026-10-21T21:56:51+00:00,EqBQ...4qvv,G5QeRfDDYUFsJofnbccirR3qc9Tycferxe15BkDFPHgF,MAUVAIS,Mint Authority still enabled; Freeze Authority still enabled
+2026-10-21T21:56:52+00:00,EqBQ...4qvv,Hg5Ja55T5wESq4vyFoiVCMeHXtGyVA69X2UHq8hgpump,OK,
+2026-10-21T21:56:52+00:00,EqBQ...4qvv,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v,OK,
+2026-10-21T21:56:53+00:00,EqBQ...4qvv,38HG4HRFvg38hxUWSBJ7D5cdBB3ekzLhFdCNkCQP5vzJ,MAUVAIS,Mint Authority still enabled; Freeze Authority still enabled
