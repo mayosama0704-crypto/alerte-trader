@@ -2,11 +2,11 @@
 Alerte copy-trading pour GitHub Actions (SANS achat automatique).
 Surveille un ou plusieurs wallets (séparés par des virgules dans le secret WALLET).
 
-Version corrigée :
-- les erreurs RPC ne sont plus silencieuses (affichées dans le log)
-- une transaction dont la lecture échoue n'est PAS marquée comme "vue" : elle sera retentée
-- le script affiche ce qu'il fait à chaque passage
-- la réponse de Telegram est vérifiée
+Version filtrée :
+- n'alerte que sur de VRAIS achats : le wallet a dépensé du SOL (ou de l'USDC/USDT)
+  et a reçu un coin en échange (les transferts, airdrops et ventes sont ignorés)
+- affiche l'âge du coin (d'après DexScreener)
+- ignore les coins plus vieux que AGE_MAX_JOURS
 """
 import csv
 import json
@@ -23,10 +23,21 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 RPC = os.environ.get("RPC_URL") or "https://api.mainnet-beta.solana.com"
 RUGCHECK = "https://api.rugcheck.xyz/v1/tokens/{}/report/summary"
-IGNORER = {"So11111111111111111111111111111111111111112"}
+DEXSCREENER = "https://api.dexscreener.com/latest/dex/tokens/{}"
+
+WSOL = "So11111111111111111111111111111111111111112"
+USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+USDT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+STABLES = {USDC, USDT}
+IGNORER = {WSOL} | STABLES
+
 FICHIER_VUES = "seen.json"
 FICHIER_JOURNAL = "journal.csv"
 NB_SIGNATURES = 30
+
+MIN_SOL = 0.01          # dépense minimale en SOL pour compter comme un achat
+MIN_STABLE = 1.0        # dépense minimale en USDC/USDT pour compter comme un achat
+AGE_MAX_JOURS = 7       # les coins plus vieux que ça sont ignorés
 
 
 class RpcErreur(Exception):
@@ -74,7 +85,12 @@ def dernieres_signatures(wallet):
     return [s["signature"] for s in (res or []) if not s.get("err")]
 
 
-def tokens_achetes(signature, wallet):
+def vrais_achats(signature, wallet):
+    """
+    Renvoie une liste de (mint, depense_sol) pour les coins réellement achetés
+    dans cette transaction. depense_sol vaut None si plusieurs coins sont achetés
+    en même temps ou si le paiement était en stablecoin.
+    """
     tx = rpc(
         "getTransaction",
         [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}],
@@ -96,10 +112,61 @@ def tokens_achetes(signature, wallet):
 
     avant = soldes(meta.get("preTokenBalances"))
     apres = soldes(meta.get("postTokenBalances"))
-    return [
+
+    recus = [
         m for m, montant in apres.items()
         if m not in IGNORER and montant > avant.get(m, 0)
     ]
+    if not recus:
+        return []
+
+    # Dépense en SOL natif (hors frais de transaction)
+    cles = (tx.get("transaction") or {}).get("message", {}).get("accountKeys", [])
+    depense_sol = 0.0
+    for i, k in enumerate(cles):
+        pubkey = k.get("pubkey") if isinstance(k, dict) else k
+        if pubkey == wallet:
+            diff = meta["preBalances"][i] - meta["postBalances"][i]
+            if i == 0:
+                diff -= meta.get("fee", 0)
+            depense_sol = diff / 1e9
+            break
+
+    # Dépense en stablecoins
+    depense_stable = sum(
+        max(avant.get(s, 0) - apres.get(s, 0), 0) for s in STABLES
+    )
+
+    if depense_sol < MIN_SOL and depense_stable < MIN_STABLE:
+        return []  # pas de paiement : transfert, airdrop ou autre
+
+    montant = round(depense_sol, 3) if (len(recus) == 1 and depense_sol >= MIN_SOL) else None
+    return [(m, montant) for m in recus]
+
+
+def age_du_coin_heures(mint):
+    """Âge du coin en heures d'après DexScreener, ou None si inconnu."""
+    try:
+        d = requests.get(DEXSCREENER.format(mint), timeout=25).json()
+    except Exception as e:
+        print(f"  DexScreener indisponible : {e}")
+        return None
+    creations = [
+        p.get("pairCreatedAt") for p in (d.get("pairs") or []) if p.get("pairCreatedAt")
+    ]
+    if not creations:
+        return None
+    return (time.time() * 1000 - min(creations)) / 3_600_000
+
+
+def format_age(heures):
+    if heures is None:
+        return "inconnu"
+    if heures < 1:
+        return f"{int(heures * 60)} min"
+    if heures < 48:
+        return f"{heures:.0f} h"
+    return f"{heures / 24:.0f} jours"
 
 
 def verifier_rugcheck(mint):
@@ -132,11 +199,11 @@ def envoyer_telegram(texte):
         print("  Telegram a échoué :", e)
 
 
-def journal(wallet, mint, verdict, raisons):
+def journal(wallet, mint, verdict, raisons, age):
     with open(FICHIER_JOURNAL, "a", newline="", encoding="utf-8") as f:
         csv.writer(f).writerow(
             [datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             court(wallet), mint, verdict, "; ".join(raisons)]
+             court(wallet), mint, verdict, "; ".join(raisons), age]
         )
 
 
@@ -174,30 +241,45 @@ def main():
         print(f"{court(wallet)} : {len(signatures)} transactions lues, {len(nouvelles)} nouvelles.")
 
         echecs = set()
-        achats = {}
+        achats = {}  # mint -> {"nb": int, "sol": float ou None}
         for sig in reversed(nouvelles):
             time.sleep(0.4)
             try:
-                mints = tokens_achetes(sig, wallet)
+                trouves = vrais_achats(sig, wallet)
             except RpcErreur as e:
                 print(f"  {sig[:8]}... : lecture échouée ({e}), sera retentée.")
                 echecs.add(sig)
                 continue
-            print(f"  {sig[:8]}... : {len(mints)} token(s) acheté(s).")
-            for mint in mints:
-                achats[mint] = achats.get(mint, 0) + 1
+            print(f"  {sig[:8]}... : {len(trouves)} vrai(s) achat(s).")
+            for mint, depense in trouves:
+                fiche = achats.setdefault(mint, {"nb": 0, "sol": 0.0})
+                fiche["nb"] += 1
+                if depense is None or fiche["sol"] is None:
+                    fiche["sol"] = None
+                else:
+                    fiche["sol"] += depense
 
-        for mint, nb in achats.items():
+        for mint, fiche in achats.items():
+            heures = age_du_coin_heures(mint)
+            age = format_age(heures)
+            if heures is not None and heures > AGE_MAX_JOURS * 24:
+                print(f"  {mint} ignoré : coin trop vieux ({age}).")
+                journal(wallet, mint, "VIEUX", [], age)
+                continue
+
             verdict, raisons = verifier_rugcheck(mint)
-            print(f"  {court(wallet)} a acheté {mint} ({nb} achat(s)) -> {verdict} {raisons}")
-            journal(wallet, mint, verdict, raisons)
-            suite = f" ({nb} achats)" if nb > 1 else ""
-            envoyer_telegram(
-                f"Le trader {court(wallet)} a acheté un coin{suite}\n"
-                f"RugCheck : {verdict} {', '.join(raisons)}\n"
-                f"https://rugcheck.xyz/tokens/{mint}\n"
-                f"https://dexscreener.com/solana/{mint}"
-            )
+            print(f"  {court(wallet)} a acheté {mint} (âge {age}) -> {verdict} {raisons}")
+            journal(wallet, mint, verdict, raisons, age)
+
+            lignes = [f"Le trader {court(wallet)} a acheté un coin"
+                      + (f" ({fiche['nb']} achats)" if fiche["nb"] > 1 else "")]
+            if fiche["sol"]:
+                lignes.append(f"Dépensé : environ {fiche['sol']:.2f} SOL")
+            lignes.append(f"Âge du coin : {age}")
+            lignes.append(f"RugCheck : {verdict} {', '.join(raisons)}")
+            lignes.append(f"https://rugcheck.xyz/tokens/{mint}")
+            lignes.append(f"https://dexscreener.com/solana/{mint}")
+            envoyer_telegram("\n".join(lignes))
 
         traitees = [s for s in signatures if s not in echecs]
         anciennes = [s for s in vues[wallet] if s not in signatures][:400]
