@@ -29,6 +29,8 @@ jobs:
           WALLET: ${{ secrets.WALLET }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RPC_URL: $
+{{ secrets.RPC_URL }}
         run: python alerte_trader.py
 
       - name: Sauvegarder l'état
