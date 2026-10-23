@@ -73,9 +73,7 @@ def rpc(methode, params):
             time.sleep(1)
             continue
         if "error" in data:
-            derniere = f"erreur RPC : {data['error']}"
-            time.sleep(1)
-            continue
+            raise RpcErreur(f"{methode} : erreur RPC : {data['error']}")
         return data.get("result")
     raise RpcErreur(f"{methode} : {derniere}")
 
@@ -93,7 +91,7 @@ def vrais_achats(signature, wallet):
     """
     tx = rpc(
         "getTransaction",
-        [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}],
+        [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 1}],
     )
     if tx is None:
         raise RpcErreur("transaction introuvable pour l'instant")
@@ -243,7 +241,7 @@ def main():
         echecs = set()
         achats = {}  # mint -> {"nb": int, "sol": float ou None}
         for sig in reversed(nouvelles):
-            time.sleep(0.4)
+            time.sleep(0.2)
             try:
                 trouves = vrais_achats(sig, wallet)
             except RpcErreur as e:
